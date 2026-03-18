@@ -1,7 +1,9 @@
 /**
  * README auditor — check README files across all repos for canonical structure.
  *
- * Every repo should have a README.md with at minimum:
+ * Every repo should have a README.md with:
+ * - License badge, status badge, and language badges
+ * - OrqaStudio brand banner
  * - Title (# heading matching the package display name)
  * - Description paragraph
  * - Installation section (for publishable packages)
@@ -19,6 +21,9 @@ export interface ReadmeAuditResult {
     name: string;
     status: "ok" | "missing" | "incomplete";
     missingSections: string[];
+    missingBadges: string[];
+    missingBanner: boolean;
+    detectedLanguages: string[];
 }
 /**
  * Audit README.md files across all directories in the dev environment.
@@ -33,5 +38,6 @@ export declare function generateReadmeTemplate(opts: {
     description: string;
     category: "lib" | "plugin" | "connector" | "tool";
     license: string;
+    languages: string[];
 }): string;
 //# sourceMappingURL=readme.d.ts.map

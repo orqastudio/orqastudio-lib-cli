@@ -89,7 +89,16 @@ export async function runRepoCommand(args: string[]): Promise<void> {
 			}
 			if (incomplete.length > 0) {
 				console.log(`\n${incomplete.length} INCOMPLETE:`);
-				for (const r of incomplete) console.log(`  ${r.name}: missing ${r.missingSections.join(", ")}`);
+				for (const r of incomplete) {
+					const issues: string[] = [];
+					if (r.missingSections.length > 0) issues.push(`sections: ${r.missingSections.join(", ")}`);
+					if (r.missingBadges.length > 0) issues.push(`badges: ${r.missingBadges.join(", ")}`);
+					if (r.missingBanner) issues.push("banner");
+					console.log(`  ${r.name}: missing ${issues.join("; ")}`);
+					if (r.detectedLanguages.length > 0) {
+						console.log(`    languages detected: ${r.detectedLanguages.join(", ")}`);
+					}
+				}
 			}
 
 			if (missing.length > 0 || incomplete.length > 0) process.exit(1);

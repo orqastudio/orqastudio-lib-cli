@@ -1,7 +1,9 @@
 /**
  * README auditor — check README files across all repos for canonical structure.
  *
- * Every repo should have a README.md with at minimum:
+ * Every repo should have a README.md with:
+ * - License badge, status badge, and language badges
+ * - OrqaStudio brand banner
  * - Title (# heading matching the package display name)
  * - Description paragraph
  * - Installation section (for publishable packages)
@@ -11,6 +13,60 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+// ── Badge and banner detection ──────────────────────────────────────────────
+
+const BANNER_PATTERN = /!\[OrqaStudio\]\(https:\/\/github\.com\/orqastudio\/orqastudio-brand/;
+const LICENSE_BADGE_PATTERN = /!\[License\]\(https:\/\/img\.shields\.io\/badge\/license/;
+const STATUS_BADGE_PATTERN = /!\[Status\]\(https:\/\/img\.shields\.io\/badge\/status/;
+
+/** Language detection: file extension → badge name. */
+const LANGUAGE_DETECTORS: Array<{
+	name: string;
+	detect: (dir: string) => boolean;
+	badge: string;
+}> = [
+	{
+		name: "Rust",
+		detect: (dir) => fs.existsSync(path.join(dir, "Cargo.toml")) || hasFileWithExt(dir, ".rs"),
+		badge: "![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)",
+	},
+	{
+		name: "Svelte",
+		detect: (dir) => hasFileWithExt(dir, ".svelte"),
+		badge: "![Svelte](https://img.shields.io/badge/Svelte-FF3E00?logo=svelte&logoColor=white)",
+	},
+	{
+		name: "Tailwind CSS",
+		detect: (dir) => hasFileMatching(dir, /^tailwind\.config/),
+		badge: "![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white)",
+	},
+	{
+		name: "TypeScript",
+		detect: (dir) => fs.existsSync(path.join(dir, "tsconfig.json")) || hasFileWithExt(dir, ".ts"),
+		badge: "![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)",
+	},
+	{
+		name: "Shell",
+		detect: (dir) => hasFileWithExt(dir, ".sh"),
+		badge: "![Shell](https://img.shields.io/badge/Shell-4EAA25?logo=gnubash&logoColor=white)",
+	},
+];
+
+function hasFileWithExt(dir: string, ext: string): boolean {
+	try {
+		return fs.readdirSync(dir).some((f) => f.endsWith(ext)) ||
+			fs.readdirSync(path.join(dir, "src")).some((f) => f.endsWith(ext));
+	} catch { return false; }
+}
+
+function hasFileMatching(dir: string, pattern: RegExp): boolean {
+	try {
+		return fs.readdirSync(dir).some((f) => pattern.test(f));
+	} catch { return false; }
+}
+
+// ── Section detection ───────────────────────────────────────────────────────
 
 export interface ReadmeSection {
 	name: string;
@@ -26,12 +82,19 @@ export const REQUIRED_SECTIONS: ReadmeSection[] = [
 	{ name: "license", required: true, pattern: /^##\s+licen[sc]e/im },
 ];
 
+// ── Audit result ────────────────────────────────────────────────────────────
+
 export interface ReadmeAuditResult {
 	dir: string;
 	name: string;
 	status: "ok" | "missing" | "incomplete";
 	missingSections: string[];
+	missingBadges: string[];
+	missingBanner: boolean;
+	detectedLanguages: string[];
 }
+
+// ── Main audit ──────────────────────────────────────────────────────────────
 
 /**
  * Audit README.md files across all directories in the dev environment.
@@ -65,29 +128,55 @@ export function auditReadmes(projectRoot: string): ReadmeAuditResult[] {
 function checkReadme(dir: string, name: string): ReadmeAuditResult {
 	const readmePath = path.join(dir, "README.md");
 
+	// Detect languages present in this repo
+	const detectedLanguages = LANGUAGE_DETECTORS
+		.filter((d) => d.detect(dir))
+		.map((d) => d.name);
+
 	if (!fs.existsSync(readmePath)) {
 		return {
 			dir,
 			name,
 			status: "missing",
 			missingSections: REQUIRED_SECTIONS.filter((s) => s.required).map((s) => s.name),
+			missingBadges: ["license", "status", ...detectedLanguages],
+			missingBanner: true,
+			detectedLanguages,
 		};
 	}
 
 	const content = fs.readFileSync(readmePath, "utf-8");
-	const missing: string[] = [];
 
+	// Check sections
+	const missingSections: string[] = [];
 	for (const section of REQUIRED_SECTIONS) {
 		if (section.required && !section.pattern.test(content)) {
-			missing.push(section.name);
+			missingSections.push(section.name);
 		}
 	}
+
+	// Check badges
+	const missingBadges: string[] = [];
+	if (!LICENSE_BADGE_PATTERN.test(content)) missingBadges.push("license");
+	if (!STATUS_BADGE_PATTERN.test(content)) missingBadges.push("status");
+	for (const lang of detectedLanguages) {
+		const langPattern = new RegExp(`!\\[${lang}\\]`, "i");
+		if (!langPattern.test(content)) missingBadges.push(lang);
+	}
+
+	// Check banner
+	const missingBanner = !BANNER_PATTERN.test(content);
+
+	const isIncomplete = missingSections.length > 0 || missingBadges.length > 0 || missingBanner;
 
 	return {
 		dir,
 		name,
-		status: missing.length > 0 ? "incomplete" : "ok",
-		missingSections: missing,
+		status: isIncomplete ? "incomplete" : "ok",
+		missingSections,
+		missingBadges,
+		missingBanner,
+		detectedLanguages,
 	};
 }
 
@@ -100,12 +189,34 @@ export function generateReadmeTemplate(opts: {
 	description: string;
 	category: "lib" | "plugin" | "connector" | "tool";
 	license: string;
+	languages: string[];
 }): string {
+	// License badge
+	const licenseBadge = `![License](https://img.shields.io/badge/license-${encodeURIComponent(opts.license)}-blue)`;
+	const statusBadge = `![Status](https://img.shields.io/badge/status-pre--release-orange)`;
+
+	// Language badges (alphabetical)
+	const langBadges = opts.languages
+		.sort()
+		.map((lang) => {
+			const detector = LANGUAGE_DETECTORS.find((d) => d.name === lang);
+			return detector?.badge ?? "";
+		})
+		.filter(Boolean);
+
+	const badgeLine = [licenseBadge, statusBadge, ...langBadges].join("\n");
+
+	const banner = `![OrqaStudio](https://github.com/orqastudio/orqastudio-brand/blob/main/assets/banners/banner-1680x240.png?raw=1)`;
+
 	const installSection = opts.category !== "tool"
 		? `\n## Installation\n\n\`\`\`bash\nnpm install ${opts.name}\n\`\`\`\n`
 		: "";
 
-	return `# ${opts.displayName}
+	return `${badgeLine}
+
+${banner}
+
+# ${opts.displayName}
 
 ${opts.description}
 ${installSection}
@@ -123,6 +234,6 @@ npm test
 
 ## License
 
-${opts.license}
+${opts.license} — see [LICENSE](LICENSE) for details.
 `;
 }
