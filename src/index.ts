@@ -13,8 +13,8 @@ export {
 	verifySymlink,
 	removeSymlink,
 	type SymlinkOptions,
-	type EnsureSymlinkStatus,
-	type VerifySymlinkResult,
+	type SymlinkResult,
+	type SymlinkVerification,
 } from "./lib/symlink.js";
 
 // Plugin management
