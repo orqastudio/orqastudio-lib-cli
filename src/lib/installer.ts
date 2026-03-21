@@ -19,6 +19,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { readLockfile, writeLockfile, type LockfileData } from "./lockfile.js";
 import { readManifest, validateManifest } from "./manifest.js";
+import { ensureSymlink } from "./symlink.js";
 import { PLATFORM_CONFIG } from "@orqastudio/types";
 import type { RelationshipType, PluginManifest } from "@orqastudio/types";
 
@@ -350,8 +351,8 @@ export function listInstalledPlugins(projectRoot?: string): InstallResult[] {
 }
 
 export interface PostInstallResult {
-	symlinkAgents: "created" | "skipped" | "exists";
-	symlinkRules: "created" | "skipped" | "exists";
+	symlinkAgents: "created" | "skipped" | "exists" | "replaced";
+	symlinkRules: "created" | "skipped" | "exists" | "replaced";
 	pluginAgentCount: number;
 	lspCount: number;
 	mcpCount: number;
@@ -400,10 +401,10 @@ export function runPostInstallSetup(
 		projectRoot,
 	);
 
-	const symlinkRules = setupSymlink(
-		path.join(claudeDir, "rules"),
-		path.join(orqaDir, "process", "rules"),
-	);
+	const rulesTarget = path.join(orqaDir, "process", "rules");
+	const symlinkRules = fs.existsSync(rulesTarget)
+		? ensureSymlink(rulesTarget, path.join(claudeDir, "rules"))
+		: ("skipped" as const);
 
 	const { lsp, mcp } = aggregateServers(projectRoot);
 	const pluginAgentCount = countPluginAgents(projectRoot);
@@ -483,7 +484,7 @@ function setupMergedAgentsDir(
 		coreAgentFiles.add(entry);
 		const linkPath = path.join(agentsDirPath, entry);
 		const targetPath = path.join(coreAgentsSource, entry);
-		ensureAgentSymlink(linkPath, targetPath);
+		ensureSymlink(targetPath, linkPath);
 	}
 
 	// Link plugin agents
@@ -514,7 +515,7 @@ function setupMergedAgentsDir(
 					if (!fs.existsSync(targetPath)) continue;
 
 					const linkPath = path.join(agentsDirPath, agentFile);
-					ensureAgentSymlink(linkPath, targetPath);
+					ensureSymlink(targetPath, linkPath);
 				}
 			} catch {
 				// Skip plugins with invalid manifests
@@ -525,28 +526,6 @@ function setupMergedAgentsDir(
 	return wasCreated ? "created" : "exists";
 }
 
-/**
- * Create or verify a symlink at linkPath pointing to targetPath.
- * If a symlink already exists at linkPath pointing to the correct target, leave it.
- * If a stale symlink or file exists, replace it.
- */
-function ensureAgentSymlink(linkPath: string, targetPath: string): void {
-	try {
-		const stat = fs.lstatSync(linkPath);
-		if (stat.isSymbolicLink()) {
-			const current = fs.readlinkSync(linkPath);
-			if (current === targetPath) return; // Already correct
-			fs.unlinkSync(linkPath);
-		} else {
-			// Regular file — leave it (manual override)
-			return;
-		}
-	} catch {
-		// Does not exist — fall through to create
-	}
-
-	fs.symlinkSync(targetPath, linkPath, "file");
-}
 
 /**
  * Count the total number of plugin agent entries across all installed plugins.
@@ -574,33 +553,6 @@ function countPluginAgents(projectRoot: string): number {
 	return count;
 }
 
-/**
- * Create a symlink from linkPath → targetPath.
- * - "created": symlink was created
- * - "skipped": target does not exist, nothing to link
- * - "exists": already a symlink (correct or not — caller can verify if needed)
- */
-function setupSymlink(
-	linkPath: string,
-	targetPath: string,
-): "created" | "skipped" | "exists" {
-	if (!fs.existsSync(targetPath)) {
-		return "skipped";
-	}
-
-	// lstatSync sees symlinks without following them
-	try {
-		const stat = fs.lstatSync(linkPath);
-		if (stat.isSymbolicLink() || stat.isDirectory() || stat.isFile()) {
-			return "exists";
-		}
-	} catch {
-		// Path does not exist — fall through to create
-	}
-
-	fs.symlinkSync(targetPath, linkPath, "junction");
-	return "created";
-}
 
 interface ServerMap {
 	[name: string]: unknown;
